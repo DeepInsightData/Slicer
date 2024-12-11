@@ -351,6 +351,14 @@ Slicer_Remote_Add(VTKm
   LABELS REMOTE_MODULE
   )
 list_conditional_append(Slicer_BUILD_VTKm Slicer_REMOTE_DEPENDENCIES VTKm)
+if (Slicer_USE_PYTHONQT)
+  list(APPEND VTKm_DEPENDENCIES python)
+endif()
+if(Slicer_USE_TBB)
+  list(APPEND VTKm_DEPENDENCIES tbb)
+endif()
+list(APPEND VTKm_DEPENDENCIES VTK)
+ExternalProject_Include_Dependencies(VTKm DEPENDS_VAR VTKm_DEPENDENCIES)
 
 #------------------------------------------------------------------------------
 # Superbuild-type bundled extensions
