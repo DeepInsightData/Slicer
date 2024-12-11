@@ -344,6 +344,14 @@ Slicer_Remote_Add(SurfaceToolbox
   )
 list_conditional_append(Slicer_BUILD_SurfaceToolbox Slicer_REMOTE_DEPENDENCIES SurfaceToolbox)
 
+Slicer_Remote_Add(VTKm
+  GIT_REPOSITORY ${EP_GIT_PROTOCOL}://gitlab.kitware.com/vtk/vtk-m.git
+  GIT_TAG master
+  OPTION_NAME Slicer_BUILD_VTKm
+  LABELS REMOTE_MODULE
+  )
+list_conditional_append(Slicer_BUILD_VTKm Slicer_REMOTE_DEPENDENCIES VTKm)
+
 #------------------------------------------------------------------------------
 # Superbuild-type bundled extensions
 #------------------------------------------------------------------------------
