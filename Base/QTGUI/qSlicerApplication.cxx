@@ -35,6 +35,7 @@
 
 #if defined(Q_OS_WIN32)
   #include <QtPlatformHeaders\QWindowsWindowFunctions> // for setHasBorderInFullScreen
+  #include <Windows.h> // For MEMORYSTATUSEX and GlobalMemoryStatusEx
 #endif
 
 #include "vtkSlicerConfigure.h" // For Slicer_USE_*, Slicer_BUILD_*_SUPPORT
@@ -318,6 +319,12 @@ void qSlicerApplicationPrivate::init()
 #endif
 
   this->initStyle();
+
+  QIcon icon;
+  icon.addFile(":/Icons/Medium/DesktopIcon.png");
+  icon.addFile(":/Icons/Large/DesktopIcon.png");
+  icon.addFile(":/Icons/XLarge/DesktopIcon.png");
+  q->setWindowIcon(icon);
 
   this->ToolTipTrapper = new ctkToolTipTrapper(q);
   this->ToolTipTrapper->setToolTipsTrapped(false);
@@ -1184,15 +1191,6 @@ void qSlicerApplication::logApplicationInformation() const
   // total page file size is a better indication of actually available memory for the process.
   // The issue has been fixed in kwSys release at the end of 2014, therefore when VTK is upgraded then
   // this workaround may not be needed anymore.
-#if defined(_MSC_VER) && _MSC_VER < 1300
-  MEMORYSTATUS ms;
-  ms.dwLength = sizeof(ms);
-  GlobalMemoryStatus(&ms);
-  unsigned long totalPhysicalBytes = ms.dwTotalPhys;
-  totalPhysicalMemoryMb = totalPhysicalBytes>>10>>10;
-  unsigned long totalVirtualBytes = ms.dwTotalPageFile;
-  totalVirtualMemoryMb = totalVirtualBytes>>10>>10;
-#else
   MEMORYSTATUSEX ms;
   ms.dwLength = sizeof(ms);
   if (GlobalMemoryStatusEx(&ms))
@@ -1202,7 +1200,6 @@ void qSlicerApplication::logApplicationInformation() const
     DWORDLONG totalVirtualBytes = ms.ullTotalPageFile;
     totalVirtualMemoryMb = totalVirtualBytes>>10>>10;
   }
-#endif
 #endif
   qDebug() << qPrintable(QString("%0: %1 MB physical, %2 MB virtual")
                          .arg(titles.at(titleIndex++).leftJustified(titleWidth, '.'))

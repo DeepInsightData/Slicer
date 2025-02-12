@@ -39,6 +39,9 @@
 #include <vtkStringArray.h>
 #include <vtksys/SystemTools.hxx>
 
+// ITK includes
+#include <itkMacro.h> // For itk::ExceptionObject
+
 // ITKSYS includes
 #include <itksys/Process.h>
 #include <itksys/SystemTools.hxx>
@@ -53,6 +56,7 @@
 #include <set>
 
 #ifdef _WIN32
+#include <Windows.h> // For GetCurrentProcessId
 #else
 #include <sys/types.h>
 #include <unistd.h>

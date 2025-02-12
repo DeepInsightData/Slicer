@@ -27,11 +27,9 @@
 // VTK includes
 #include <vtkCollection.h>
 
-// ITK includes
-#include <itkPlatformMultiThreader.h>
-
 // STL includes
 #include <mutex>
+#include <thread>
 
 class vtkMRMLSelectionNode;
 class vtkMRMLInteractionNode;
@@ -227,11 +225,11 @@ protected:
   vtkSlicerApplicationLogic();
   ~vtkSlicerApplicationLogic() override;
 
-   /// Callback used by a MultiThreader to start a processing thread
-  static itk::ITK_THREAD_RETURN_TYPE ProcessingThreaderCallback( void * );
+  /// Callback used by a std::thread to start a processing thread
+  static void ProcessingThreaderCallback(vtkSlicerApplicationLogic* appLogic);
 
-   /// Callback used by a MultiThreader to start a networking thread
-  static itk::ITK_THREAD_RETURN_TYPE NetworkingThreaderCallback( void * );
+  /// Callback used by a std::thread to start a networking thread
+  static void NetworkingThreaderCallback(vtkSlicerApplicationLogic* appLogic);
 
   /// Task processing loop that is run in the processing thread
   void ProcessProcessingTasks();
@@ -256,7 +254,6 @@ private:
   vtkSlicerApplicationLogic(const vtkSlicerApplicationLogic&);
   void operator=(const vtkSlicerApplicationLogic&);
 
-  itk::PlatformMultiThreader::Pointer ProcessingThreader;
   std::mutex ProcessingThreadActiveLock;
   std::mutex ProcessingTaskQueueLock;
   std::mutex ModifiedQueueActiveLock;
@@ -266,8 +263,8 @@ private:
   std::mutex WriteDataQueueActiveLock;
   std::mutex WriteDataQueueLock;
   vtkTimeStamp RequestTimeStamp;
-  int ProcessingThreadId;
-  std::vector<int> NetworkingThreadIDs;
+  std::thread ProcessingThread;
+  std::vector<std::thread> NetworkingThreads;
   int ProcessingThreadActive;
   int ModifiedQueueActive;
   int ReadDataQueueActive;

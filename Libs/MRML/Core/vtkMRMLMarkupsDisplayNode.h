@@ -24,7 +24,7 @@
 #ifndef __vtkMRMLMarkupsDisplayNode_h
 #define __vtkMRMLMarkupsDisplayNode_h
 
-#include "vtkSlicerMarkupsModuleMRMLExport.h"
+#include "vtkMRMLExport.h"
 
 #include "vtkMRMLDisplayNode.h"
 #include "vtkMRMLMarkupsNode.h"
@@ -41,7 +41,7 @@
 class vtkMRMLInteractionEventData;
 class vtkMRMLProceduralColorNode;
 
-class  VTK_SLICER_MARKUPS_MODULE_MRML_EXPORT vtkMRMLMarkupsDisplayNode : public vtkMRMLDisplayNode
+class  VTK_MRML_EXPORT vtkMRMLMarkupsDisplayNode : public vtkMRMLDisplayNode
 {
 public:
   static vtkMRMLMarkupsDisplayNode *New();
@@ -143,6 +143,17 @@ public:
   /// ComponentControlPoint, -1 otherwise.
   /// \param context Name of the interaction context. By default it is empty string, meaning mouse
   int GetActiveControlPoint(std::string context=vtkMRMLMarkupsDisplayNode::GetDefaultContextName());
+
+  ///@{
+  /// Constants representing the context in which a Markups control point is being moved.
+  ///
+  /// - `Markups.MovingInSliceView` stores the layout name of the slice view where the control point is being manipulated.
+  /// - `Markups.MovingMarkupIndex` stores the index of the control point currently being moved.
+  ///
+  /// These attributes are used to track interactions with Markups nodes during user input events.
+  static const char* GetMovingInSliceViewAttributeName() { return "Markups.MovingInSliceView"; }
+  static const char* GetMovingMarkupIndexAttributeName() { return "Markups.MovingMarkupIndex"; }
+  ///@}
 
   /// Set the text scale of the associated text.
   vtkGetMacro(TextScale,double);

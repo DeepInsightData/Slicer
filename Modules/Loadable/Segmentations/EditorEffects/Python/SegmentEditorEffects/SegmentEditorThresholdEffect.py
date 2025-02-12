@@ -1,5 +1,6 @@
 import logging
 import os
+import weakref
 
 import ctk
 import vtk
@@ -66,6 +67,15 @@ class SegmentEditorThresholdEffect(AbstractScriptedSegmentEditorEffect):
         # the threshold preview glow, but not let the user modify the preset threshold by view interactions.
         # In such cases, enableViewInteractions can be set to False.
         self.enableViewInteractions = True
+
+    def cleanup(self):
+        # Disconnect the timer signal to allow proper garbage collection.
+        #
+        # This prevents lingering signal/slot connections from keeping
+        # the object alive. For more details, see the parent class
+        # cleanup() docstring or the following issue:
+        # https://github.com/Slicer/Slicer/issues/7392
+        self.timer.disconnect("timeout()", self.preview)
 
     def clone(self):
         import qSlicerSegmentationsEditorEffectsPythonQt as effects
@@ -983,10 +993,17 @@ class PreviewPipeline:
 # Histogram threshold
 #
 class HistogramEventFilter(qt.QObject):
-    thresholdEffect = None
+
+    def __init__(self, *args, **kwargs):
+        qt.QObject.__init__(self, *args, **kwargs)
+        self.thresholdEffectWeakRef = None
+
+    @property
+    def thresholdEffect(self):
+        return self.thresholdEffectWeakRef() if self.thresholdEffectWeakRef else None
 
     def setThresholdEffect(self, thresholdEffect):
-        self.thresholdEffect = thresholdEffect
+        self.thresholdEffectWeakRef = weakref.ref(thresholdEffect)
 
     def eventFilter(self, object, event):
         if self.thresholdEffect is None:

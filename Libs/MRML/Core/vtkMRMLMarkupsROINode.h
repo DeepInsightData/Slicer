@@ -26,7 +26,7 @@
 #include "vtkMRMLModelNode.h"
 
 // Markups includes
-#include "vtkSlicerMarkupsModuleMRMLExport.h"
+#include "vtkMRMLExport.h"
 #include "vtkMRMLMarkupsDisplayNode.h"
 #include "vtkMRMLMarkupsNode.h"
 
@@ -53,7 +53,7 @@ class vtkPlanes;
 ///   - World: Patient coordinate system (RAS). Transform between Node and World
 ///     coordinate systems are defined by the parent transform of the node.
 ///
-class  VTK_SLICER_MARKUPS_MODULE_MRML_EXPORT vtkMRMLMarkupsROINode : public vtkMRMLMarkupsNode
+class  VTK_MRML_EXPORT vtkMRMLMarkupsROINode : public vtkMRMLMarkupsNode
 {
 public:
   static vtkMRMLMarkupsROINode *New();
@@ -233,7 +233,7 @@ public:
   /// Get the implicit function that represents the ROI in node coordinates.
   vtkGetObjectMacro(ImplicitFunction, vtkImplicitFunction);
   /// Get the implicit function that represents the ROI in world coordinates.
-  vtkGetObjectMacro(ImplicitFunctionWorld, vtkImplicitFunction);
+  vtkImplicitFunction* GetImplicitFunctionWorld() override { return this->ImplicitFunctionWorld; }
 
   /// Create ROI box as surface mesh in the world coordinate system as a new vtkPolyData object.
   /// Only in C++: The caller must take ownership of the returned object.
