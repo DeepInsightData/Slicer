@@ -1476,6 +1476,7 @@ bool qSlicerSaveDataDialog::exec(const qSlicerIO::IOProperties& readerProperties
   d->setWindowFlags(d->windowFlags() | Qt::WindowMaximizeButtonHint);
 
   d->setMRMLScene(qSlicerCoreApplication::application()->mrmlScene());
+  d->saveSceneAsDataBundle(); // save scene as data bundle by default
   if (d->exec() != QDialog::Accepted)
   {
     return false;

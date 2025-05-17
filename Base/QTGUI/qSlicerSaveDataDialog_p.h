@@ -60,6 +60,7 @@ public slots:
   /// Reimplemented from QDialog::accept(), only accept the dialog if
   /// save() is successful.
   void accept() override;
+  void saveSceneAsDataBundle();
 
 protected slots:
   void formatChanged();
@@ -70,7 +71,6 @@ protected slots:
   void updateSize();
   void onSceneFormatChanged();
   void enableNodes(bool);
-  void saveSceneAsDataBundle();
   void onItemChanged(QTableWidgetItem*);
 
 protected:
