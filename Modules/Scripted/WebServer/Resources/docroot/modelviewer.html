@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="en">
+
+  <head>
+    <title>3D Slicer &lt;model-viewer&gt; example</title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+
+  <body>
+
+    <model-viewer
+      id="modelViewer"
+      src="/slicer/threeDGraphics"
+      alt="A 3D model from Slicer"
+      shadow-intensity="0" ar camera-controls touch-action="pan-y"
+      exposure="0.3">
+    </model-viewer>
+
+    <div class="controls glass">
+      <div style="color: white;">背景色:</div>
+      <div class="radio-group">
+        <input type="radio" name="background" value="black" id="black" checked>
+        <label for="black" class="color-black"></label>
+        
+        <input type="radio" name="background" value="white" id="white">
+        <label for="white" class="color-white"></label>
+        
+        <input type="radio" name="background" value="gray" id="gray">
+        <label for="gray" class="color-gray"></label>
+        
+        <input type="radio" name="background" value="gradient" id="gradient">
+        <label for="gradient" class="color-gradient"></label>
+      </div>
+
+      <div class="separator"></div>
+      <div id="modelControls" class="model-controls">
+        <div class="loading">加载模型中...</div>
+      </div>
+    </div>
+
+  </body>
+
+  <script type="module" src="/js/model-viewer.min.js"></script>
+  <script>
+    (() => {
+      let modelData = null;
+      let modelMaterials = new Map(); // 存储原始材质
+      
+      // 背景色切换功能
+      const backgroundRadios = document.querySelectorAll('input[name="background"]');
+      
+      backgroundRadios.forEach(radio => {
+        radio.addEventListener('change', function() {
+          const body = document.body;
+          
+          switch(this.value) {
+            case 'black':
+              body.style.background = 'black';
+              break;
+            case 'white':
+              body.style.background = 'white';
+              break;
+            case 'gray':
+              body.style.background = '#404040';
+              break;
+            case 'gradient':
+              body.style.background = 'linear-gradient(90deg, #9295ce 0%, #bbbde4 100%)';
+              break;
+            default:
+              body.style.background = 'black';
+          }
+        });
+      });
+
+      // 1. 获取三维节点元数据
+      async function fetchThreeDNodeMeta() {
+        try {
+          const response = await fetch('/slicer/threeDNodeMeta');
+          if (!response.ok) throw new Error('接口请求失败');
+          const data = await response.json();
+          return data; // 返回数组
+        } catch (e) {
+          console.error('获取三维节点元数据失败:', e);
+          return [];
+        }
+      }
+
+      function ensureUniqueMaterial(mesh) {
+        if (!mesh.material) return;
+        // 如果有多个 mesh 共用同一个材质，则需要克隆
+        if (mesh.material.isMaterial && mesh.material.uuid) {
+          // 检查是否有其他 mesh 也用这个材质
+          // 这里可以用一个全局 Map<material.uuid, mesh数量> 来统计
+          // 简单做法：直接克隆
+          mesh.material = mesh.material.clone();
+        } else if (Array.isArray(mesh.material)) {
+          mesh.material = mesh.material.map(mat => mat.clone());
+        }
+      }
+
+      function setMeshVisible(mesh, visible, modelViewer) {
+        mesh.visible = visible;
+        if (mesh.material) {
+          mesh.material.visible = visible;
+        }
+        if (modelViewer.requestUpdate) {
+          modelViewer.requestUpdate();
+        }
+      }
+
+      // 获取模型数据并创建控制界面
+      async function loadModelControls() {
+        const modelViewer = document.getElementById('modelViewer');
+        const modelControlsDiv = document.getElementById('modelControls');
+        
+        try {
+          // 等待模型加载完成
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('模型加载超时')), 60000);
+            
+            if (modelViewer.loaded) {
+              clearTimeout(timeout);
+              resolve();
+            } else {
+              modelViewer.addEventListener('load', () => {
+                clearTimeout(timeout);
+                resolve();
+              }, { once: true });
+              
+              modelViewer.addEventListener('error', (e) => {
+                clearTimeout(timeout);
+                reject(new Error('模型加载失败: ' + e.detail));
+              }, { once: true });
+            }
+          });
+          const metas = await fetchThreeDNodeMeta();
+          // 额外等待确保模型完全初始化
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const success = await tryCreateAdvancedControls(modelViewer, metas, modelControlsDiv);
+          
+          if (!success) {
+            throw new Error('无法创建任何模型控制');
+          }
+          
+        } catch (error) {
+          console.error('加载模型控制失败:', error);
+          modelControlsDiv.innerHTML = `
+            <div class="error">
+              <div>加载失败: ${error.message}</div>
+              <button id="retryLoad" class="control-btn" style="margin-top: 10px;">重试</button>
+            </div>
+          `;
+          
+          document.getElementById('retryLoad').addEventListener('click', () => {
+            modelControlsDiv.innerHTML = '<div class="loading">重新加载中...</div>';
+            setTimeout(loadModelControls, 1000);
+          });
+        }
+      }
+
+      // 方法1: 尝试访问 model-viewer 的内部场景
+      async function tryCreateAdvancedControls(modelViewer, metas, modelControlsDiv) {
+        try {
+          // 尝试多种方式获取场景
+          let scene = null;
+          let meshes = [];
+          
+          // 方法1: 通过Symbol访问
+          const symbols = Object.getOwnPropertySymbols(modelViewer);
+          console.log('Available symbols:', symbols.map(s => s.description));
+          
+          const sceneSymbol = symbols.find(s => s.description && (
+            s.description.includes('scene') || 
+            s.description.includes('Scene') ||
+            s.description.includes('threeScene')
+          ));
+          
+          if (sceneSymbol) {
+            scene = modelViewer[sceneSymbol];
+            console.log('找到scene通过symbol:', scene);
+          }
+          
+          // 如果找到场景，扫描所有mesh
+          if (scene) {
+            meshes = findAllMeshes(scene, metas);
+            console.log(`在场景中找到 ${meshes.length} 个mesh对象`);
+            
+            if (meshes.length > 0) {
+              createMeshControlUI(meshes, modelViewer, modelControlsDiv);
+              return true;
+            }
+          }
+          
+          console.log('无法找到可控制的mesh对象');
+          return false;
+          
+        } catch (error) {
+          console.error('高级控制模式失败:', error);
+          return false;
+        }
+      }
+
+      function getMeshBBoxArray(mesh) {
+        if (!mesh.geometry) return null;
+        if (!mesh.geometry.boundingBox) {
+          mesh.geometry.computeBoundingBox();
+        }
+        // 克隆一份，避免污染原始 boundingBox
+        const bbox = mesh.geometry.boundingBox;
+        return [
+          bbox.min.x, bbox.max.x,
+          bbox.min.y, bbox.max.y,
+          bbox.min.z, bbox.max.z
+        ];
+      }
+
+      // 判断两个bbox是否近似（允许每个分量有一定误差）
+      function isBBoxApproxEqual(bbox1, bbox2, tolerance = 2) {
+        if (!bbox1 || !bbox2 || bbox1.length !== 6 || bbox2.length !== 6) return false;
+        for (let i = 0; i < 6; ++i) {
+          if (Math.abs(bbox1[i] - bbox2[i]) > tolerance) return false;
+        }
+        return true;
+      }
+
+      function isColorApproxEqual(c1, c2, tolerance = 0.01) {
+        if (!c1 || !c2) return false;
+        // 支持数组或对象
+        const r1 = Array.isArray(c1) ? c1[0] : c1.r;
+        const g1 = Array.isArray(c1) ? c1[1] : c1.g;
+        const b1 = Array.isArray(c1) ? c1[2] : c1.b;
+        const r2 = Array.isArray(c2) ? c2[0] : c2.r;
+        const g2 = Array.isArray(c2) ? c2[1] : c2.g;
+        const b2 = Array.isArray(c2) ? c2[2] : c2.b;
+        return (
+          Math.abs(r1 - r2) < tolerance &&
+          Math.abs(g1 - g2) < tolerance &&
+          Math.abs(b1 - b2) < tolerance
+        );
+      }
+
+      // 近似匹配meta
+      function matchMeshMeta(mesh, metas) {
+        // 先用颜色近似分组
+        const meshColor = getMeshColor(mesh);
+        const colorMatched = metas.filter(meta => {
+          if (!meta.color) return false;
+          return isColorApproxEqual(meshColor, meta.color, 0.02);
+        });
+        if (colorMatched.length === 1) {
+          return colorMatched[0];
+        }
+
+        const meshBBox = getMeshBBoxArray(mesh);
+        if (!meshBBox) return null;
+        let metasMatched = metas.filter(m => isBBoxApproxEqual(meshBBox, m.bbox, 5));
+        if (metasMatched && metasMatched.length == 1) 
+        {
+          return metasMatched[0];
+        }
+        // 还没有就返回null
+        return null;
+      }
+
+      // 递归查找所有mesh对象
+      function findAllMeshes(object, metas, meshes = [], path = '') {
+        if (!object || typeof object !== 'object') return meshes;
+        
+        // 检查当前对象是否为mesh
+        if (object.isMesh && object.geometry) {
+          ensureUniqueMaterial(object);
+          const meta = matchMeshMeta(object, metas);
+          if (meta) {
+            setMeshColor(object, meta.color, modelViewer);
+          }
+          const meshName = meta ? meta.name : object.name || `Mesh_${object.uuid}`;
+          const meshInfo = {
+            mesh: object,
+            name: meshName,
+            path: path,
+            uuid: object.uuid,
+            meta: meta,
+          };
+          meshes.push(meshInfo);
+          console.log(`发现mesh: ${meshInfo.name}, 材质数量: ${meshInfo.materialCount}, 顶点数: ${meshInfo.vertexCount}`);
+        }
+        
+        // 递归搜索子对象
+        if (object.children && Array.isArray(object.children)) {
+          object.children.forEach((child, index) => {
+            findAllMeshes(child, metas, meshes, `${path}/child[${index}]`);
+          });
+        }
+        
+        return meshes;
+      }
+
+      // 从modelViewer直接提取mesh信息
+      function extractMeshesFromModelViewer(modelViewer) {
+        const meshes = [];
+        
+        try {
+          // 尝试从内部属性获取
+          const internalKeys = Object.keys(modelViewer);
+          console.log('ModelViewer内部属性:', internalKeys);
+          
+          // 检查是否有Three.js相关的属性
+          for (const key of internalKeys) {
+            const value = modelViewer[key];
+            if (value && typeof value === 'object') {
+              if (value.scene || value.children) {
+                console.log(`检查属性 ${key}:`, value);
+                findAllMeshes(value, metas, meshes, key);
+              }
+            }
+          }
+          
+          // 尝试通过Symbol属性
+          const symbols = Object.getOwnPropertySymbols(modelViewer);
+          for (const symbol of symbols) {
+            try {
+              const value = modelViewer[symbol];
+              if (value && typeof value === 'object') {
+                findAllMeshes(value, metas, meshes, symbol.description || 'symbol');
+              }
+            } catch (e) {
+              // 忽略访问错误
+            }
+          }
+          
+        } catch (error) {
+          console.error('提取mesh失败:', error);
+        }
+        
+        return meshes;
+      }
+
+      function colorToKey(color) {
+        // 生成分组用的字符串key
+        return `${ Math.round(color.r*255)},${Math.round(color.g*255)},${Math.round(color.b*255)}`;
+      }
+
+      // 按近似颜色分组
+      function groupMeshes(meshInfos, tolerance = 0.02) {
+        const groups = [];
+        meshInfos.forEach(meshInfo => {
+          let foundGroup = null;
+          const meta = meshInfo.meta;
+          const meshColor = getMeshColor(meshInfo.mesh);
+          if (meta && meta.name) {
+            if (meta.name.includes('lobe')) {
+              foundGroup = groups.find(group => group.name === 'lobe');
+              if (foundGroup) {
+                  foundGroup.meshes.push(meshInfo);
+              } else {
+                groups.push({ name: 'lobe', color: meshColor, meshes: [meshInfo] });
+              }
+              return;
+            }
+            if (meta.name.includes('_')) {
+              const groupName = meta.name.split('_')[0];
+              foundGroup = groups.find(group => group.name === groupName);
+              if (foundGroup) {
+                foundGroup.meshes.push(meshInfo);
+              } else {
+                groups.push({ name: groupName, color: meshColor, meshes: [meshInfo] });
+              }
+              return;
+            }
+          } 
+          for (const group of groups) {
+            if (isColorApproxEqual(meshColor, group.color, tolerance)) {
+              foundGroup = group;
+              break;
+            }
+          }
+
+          if (foundGroup) {
+            foundGroup.meshes.push(meshInfo);
+          } else {
+            // 新建分组，color 用第一个 mesh 的颜色
+            groups.push({ name: "other", color: meshColor, meshes: [meshInfo] });
+          }
+        });
+        return groups;
+      }
+
+      // 创建mesh控制界面
+      function createMeshControlUI(meshInfos, modelViewer, modelControlsDiv) {
+        console.log('=== 开始创建Mesh控制界面 ===');
+        console.log(`总共找到 ${meshInfos.length} 个mesh对象`);
+        
+        let controlsHTML = `
+          <div class="control-header">
+            <button id="showAllMeshes" class="control-btn" style="background: #4b5463;color:white;">全部显示</button>
+            <button id="hideAllMeshes" class="control-btn" style="background: #4b5463;color:white;">全部隐藏</button>
+            <button id="resetAllMeshes" class="control-btn" style="background: #4b5463;color:white;">重置全部</button>
+          </div>
+          <div class="mesh-list">
+        `;
+
+        const groups = groupMeshes(meshInfos);
+        groups.forEach((group, groupIndex) => {
+          const color = group.color;
+          const colorHex = rgbToHex(color);
+          const groupId = `group_${colorHex}`;
+          const meshes = group.meshes;
+
+          if (meshes.length > 1) {
+            controlsHTML += `
+              <div class="accordion">
+                <div class="accordion-item">
+                  <div class="accordion-header" data-group-id="${groupId}" style="cursor:pointer;display:flex;align-items:center;">
+                    <input type="checkbox" id="group_visible_${groupId}" checked />
+                    <label class="group-name">${group.name}</label>
+                    <span style="display:inline-block;width:36px;height:18px;background:${colorHex};border-radius:3px;margin-right:8px;border:1px solid #ccc;"></span>
+                  </div>
+                  <div class="accordion-body" id="group_${groupId}" style="display:none;">
+            `;
+          }
+          meshes.forEach((meshInfo, index) => {
+            const meshId = meshInfo.uuid;
+            const mesh = meshInfo.mesh;
+          
+            console.log(`\n--- 处理Mesh ${meshInfo.uuid}: ${meshInfo.name} ---`);
+            console.log('Mesh对象:', mesh);
+            console.log('材质信息:', mesh.material);
+            
+            // 读取当前mesh的实际属性
+            const currentVisible = mesh.visible !== false;
+            const currentOpacity = 1.0;
+            const currentColorRgb = getMeshColor(mesh);
+            const currentColorHex = rgbToHex(currentColorRgb);
+            
+            console.log(`当前状态 - 可见: ${currentVisible}, 透明度: ${currentOpacity}, 颜色: ${currentColorHex}`);
+            
+            // 保存原始状态
+            const originalState = {
+              visible: currentVisible,
+              opacity: currentOpacity,
+              color: currentColorRgb,
+              material: mesh.material
+            };
+            
+            modelMaterials.set(meshId, originalState);
+            
+            const currentOpacityValue = Math.round(currentOpacity * 100);
+            const currentColor = rgbToHex(currentColorRgb);
+            
+            // 材质类型显示
+            let materialInfo = '';
+            if (Array.isArray(mesh.material)) {
+              materialInfo = `${mesh.material.length}材质`;
+              if (mesh.material.length > 0) {
+                materialInfo += ` (${mesh.material[0]?.type || 'Unknown'})`;
+              }
+            } else {
+              materialInfo = `${mesh.material?.type || 'Unknown'}材质`;
+            }
+            
+            console.log(`控件初始值 - 透明度: ${currentOpacityValue}%, 颜色: ${currentColor}`);
+            
+            controlsHTML += `
+              <div class="mesh-item" data-mesh-id="${meshId}" data-group-id="${groupId}">
+                <div class="mesh-header">
+                  <input type="checkbox" id="visible_${meshId}" ${currentVisible ? 'checked' : ''}>
+                  <label for="visible_${meshId}" class="mesh-name">${meshInfo.name}</label>
+                  <button class="isolate-btn" data-mesh-id="${meshId}" style="color:white;">单独显示</button>
+                  <input type="color" id="color_${meshId}" value="${currentColor}" class="color-picker">
+                </div>
+                <div class="mesh-controls">
+                  <div class="control-row">
+                    <label for="opacity_${meshId}" style="color:white;">透明度:</label>
+                    <input type="range" id="opacity_${meshId}" min="0" max="100" value="${currentOpacityValue}" class="opacity-slider">
+                    <span class="value-display" style="color:white;">${currentOpacityValue}%</span>
+                  </div>
+                </div>
+              </div>
+            `;
+          });
+          if (meshes.length > 1) {
+            controlsHTML += `
+                  </div>
+                </div>
+              </div>
+            `;
+          }
+        });
+
+        controlsHTML += '</div>';
+        modelControlsDiv.innerHTML = controlsHTML;
+        
+        console.log('=== Mesh控制界面创建完成 ===');
+        
+        // 验证控件值是否正确设置
+        setTimeout(() => {
+          console.log('=== 验证控件初始值 ===');
+          meshInfos.forEach((meshInfo, index) => {
+            const meshId = meshInfo.uuid;
+            const opacitySlider = document.getElementById(`opacity_${meshId}`);
+            const colorPicker = document.getElementById(`color_${meshId}`);
+            const visibilityCheckbox = document.getElementById(`visible_${meshId}`);
+            
+            if (opacitySlider && colorPicker && visibilityCheckbox) {
+              console.log(`✓ Mesh ${meshId} (${meshInfo.name}) 控件值:`);
+              console.log(`  透明度滑块: ${opacitySlider.value}%`);
+              console.log(`  颜色选择器: ${colorPicker.value}`);
+              console.log(`  可见性复选框: ${visibilityCheckbox.checked}`);
+            } else {
+              console.warn(`✗ Mesh ${meshId} 的某些控件未正确创建`);
+            }
+          });
+          console.log('=== 验证完成 ===');
+        }, 100);
+        
+        // 设置事件监听器
+        setupMeshControlEvents(meshInfos, modelViewer);
+
+        // 手风琴展开/收起
+        document.querySelectorAll('.accordion-header').forEach(header => {
+          header.addEventListener('click', function() {
+            const groupId = this.dataset.groupId;
+            const body = document.getElementById('group_' + groupId);
+            if (body.style.display === 'none') {
+              body.style.display = '';
+            } else {
+              body.style.display = 'none';
+            }
+          });
+        });
+
+        // 组显隐checkbox事件
+        document.querySelectorAll('input[id^="group_visible_"]').forEach(groupCheckbox => {
+          groupCheckbox.addEventListener('click', function(event) {
+            event.stopPropagation(); // 阻止事件冒泡
+          });
+          groupCheckbox.addEventListener('change', function() {
+            const groupId = this.id.replace('group_visible_', '');
+            const checked = this.checked;
+            // 找到该组下所有mesh-item
+            document.querySelectorAll(`.mesh-item[data-group-id="${groupId}"]`).forEach(meshDiv => {
+              const meshId = meshDiv.dataset.meshId;
+              // 1. 设置mesh对象visible
+              const meshInfo = meshInfos.find(info => info.uuid === meshId);
+              if (meshInfo) setMeshVisible(meshInfo.mesh, checked, modelViewer);
+              // 2. 设置mesh的checkbox
+              const meshCheckbox = document.getElementById(`visible_${meshId}`);
+              if (meshCheckbox) meshCheckbox.checked = checked;
+            });
+            // 可选：强制刷新
+            if (modelViewer.requestUpdate) modelViewer.requestUpdate();
+          });
+        });
+      }
+
+      // 获取mesh的透明度
+      function getMeshOpacity(mesh) {
+        if (!mesh || !mesh.material) {
+          console.log('Mesh无材质，使用默认透明度1.0');
+          return 1.0;
+        }
+        
+        let opacity = 1.0;
+        
+        if (Array.isArray(mesh.material)) {
+          // 材质数组：取第一个有效材质的透明度
+          for (let i = 0; i < mesh.material.length; i++) {
+            const mat = mesh.material[i];
+            if (mat && typeof mat.opacity === 'number') {
+              opacity = mat.opacity;
+              console.log(`Mesh材质数组[${i}]透明度:`, opacity);
+              break;
+            }
+          }
+        } else {
+          // 单个材质
+          if (typeof mesh.material.opacity === 'number') {
+            opacity = mesh.material.opacity;
+          } else {
+            // Three.js材质默认透明度
+            opacity = 1.0;
+          }
+          console.log(`Mesh单材质透明度:`, opacity, '材质类型:', mesh.material.type);
+        }
+        
+        // 确保透明度在有效范围内
+        opacity = Math.max(0, Math.min(1, opacity));
+        
+        return opacity;
+      }
+
+      // 获取mesh的颜色
+      function getMeshColor(mesh) {
+        const defaultColor = { r: 1, g: 1, b: 1 };
+        
+        if (!mesh || !mesh.material) {
+          console.log('Mesh无材质，使用默认颜色');
+          return defaultColor;
+        }
+        
+        let targetMaterial = null;
+        
+        if (Array.isArray(mesh.material)) {
+          // 材质数组：找第一个有颜色属性的材质
+          for (let i = 0; i < mesh.material.length; i++) {
+            const mat = mesh.material[i];
+            if (mat && mat.color) {
+              targetMaterial = mat;
+              console.log(`使用材质数组[${i}]的颜色，材质类型:`, mat.type);
+              break;
+            }
+          }
+        } else {
+          // 单个材质
+          targetMaterial = mesh.material;
+          console.log(`使用单材质颜色，材质类型:`, targetMaterial.type);
+        }
+        
+        if (!targetMaterial || !targetMaterial.color) {
+          console.log('材质无颜色属性，使用默认白色');
+          return defaultColor;
+        }
+        
+        // Three.js颜色对象处理
+        const color = targetMaterial.color;
+        let r, g, b;
+        
+        if (typeof color.r === 'number' && typeof color.g === 'number' && typeof color.b === 'number') {
+          // 标准Three.js Color对象
+          r = color.r;
+          g = color.g;
+          b = color.b;
+        } else if (typeof color.getHex === 'function') {
+          // Three.js Color对象，通过getHex获取
+          const hex = color.getHex();
+          r = ((hex >> 16) & 255) / 255;
+          g = ((hex >> 8) & 255) / 255;
+          b = (hex & 255) / 255;
+        } else if (typeof color === 'number') {
+          // 十六进制数值
+          r = ((color >> 16) & 255) / 255;
+          g = ((color >> 8) & 255) / 255;
+          b = (color & 255) / 255;
+        } else {
+          console.log('无法解析颜色格式:', color);
+          return defaultColor;
+        }
+        
+        // 确保颜色值在有效范围内
+        r = Math.max(0, Math.min(1, r));
+        g = Math.max(0, Math.min(1, g));
+        b = Math.max(0, Math.min(1, b));
+        
+        console.log(`Mesh颜色 RGB(${r.toFixed(3)}, ${g.toFixed(3)}, ${b.toFixed(3)})`);
+        
+        return { r, g, b };
+      }
+
+      // RGB转十六进制 - 改进版本
+      function rgbToHex(color) {
+        if (!color || typeof color !== 'object') {
+          console.log('无效的颜色对象，使用默认白色');
+          return '#ffffff';
+        }
+        
+        const r = Math.round((color.r || 0) * 255);
+        const g = Math.round((color.g || 0) * 255);
+        const b = Math.round((color.b || 0) * 255);
+        
+        // 确保每个分量都是有效的十六进制
+        const rHex = Math.max(0, Math.min(255, r)).toString(16).padStart(2, '0');
+        const gHex = Math.max(0, Math.min(255, g)).toString(16).padStart(2, '0');
+        const bHex = Math.max(0, Math.min(255, b)).toString(16).padStart(2, '0');
+        
+        const hexColor = `#${rHex}${gHex}${bHex}`;
+        console.log(`RGB(${r}, ${g}, ${b}) -> ${hexColor}`);
+        
+        return hexColor;
+      }
+
+      // 设置mesh控制事件
+      function setupMeshControlEvents(meshInfos, modelViewer) {
+        const controlsDiv = document.getElementById('modelControls');
+        
+        // 显隐控制
+        controlsDiv.addEventListener('change', (event) => {
+          if (event.target.type === 'checkbox' && event.target.id.startsWith('visible_')) {
+            const meshId = event.target.closest('.mesh-item').dataset.meshId;
+            const meshInfo = meshInfos.find(info => info.uuid === meshId);
+            
+            if (meshInfo) {
+              setMeshVisible(meshInfo.mesh, event.target.checked, modelViewer);
+            }
+          }
+        });
+
+        // 透明度控制
+        controlsDiv.addEventListener('input', (event) => {
+          if (event.target.classList.contains('opacity-slider')) {
+            const meshId = event.target.closest('.mesh-item').dataset.meshId;
+            const meshInfo = meshInfos.find(info => info.uuid === meshId);
+            const opacity = event.target.value / 100;
+            
+            if (meshInfo) {
+              setMeshOpacity(meshInfo.mesh, opacity, modelViewer);
+              event.target.nextElementSibling.textContent = `${event.target.value}%`;
+            }
+          }
+        });
+
+        // 颜色控制
+        controlsDiv.addEventListener('change', (event) => {
+          if (event.target.classList.contains('color-picker')) {
+            const meshId = event.target.closest('.mesh-item').dataset.meshId;
+            const meshInfo = meshInfos.find(info => info.uuid === meshId);
+            
+            if (meshInfo) {
+              setMeshHexColor(meshInfo.mesh, event.target.value, modelViewer);
+            }
+          }
+        });
+
+        // 按钮控制
+        controlsDiv.addEventListener('click', (event) => {
+          const meshId = event.target.dataset.meshId;
+          if (event.target.classList.contains('isolate-btn')) {
+            meshInfos.forEach((info, index) => {
+              const shouldShow = info.uuid === meshId;
+              setMeshVisible(info.mesh, shouldShow, modelViewer);
+              document.getElementById(`visible_${info.uuid}`).checked = shouldShow;
+            });
+            document.querySelectorAll('input[id^="group_visible_"]').forEach(groupCheckbox => {
+              groupCheckbox.checked = true;
+            });
+          }
+        });
+
+        // 全部显示
+        document.getElementById('showAllMeshes').addEventListener('click', () => {
+          meshInfos.forEach((info, index) => {
+            setMeshVisible(info.mesh, true, modelViewer)
+            document.getElementById(`visible_${info.uuid}`).checked = true;
+          });
+          document.querySelectorAll('input[id^="group_visible_"]').forEach(groupCheckbox => {
+              groupCheckbox.checked = true;
+          });
+          if (modelViewer.requestUpdate) modelViewer.requestUpdate();
+        });
+
+        document.getElementById('hideAllMeshes').addEventListener('click', () => {
+          meshInfos.forEach((info, index) => {
+            setMeshVisible(info.mesh, false, modelViewer)
+            document.getElementById(`visible_${info.uuid}`).checked = false;
+          });
+          document.querySelectorAll('input[id^="group_visible_"]').forEach(groupCheckbox => {
+            groupCheckbox.checked = false;
+          });
+        });
+
+        document.getElementById('resetAllMeshes').addEventListener('click', () => {
+          meshInfos.forEach((info, index) => {
+            const meshId = info.uuid;
+            const originalData = modelMaterials.get(meshId);
+            
+            if (originalData) {
+              setMeshVisible(info.mesh, originalData.visible, modelViewer)
+              setMeshOpacity(info.mesh, originalData.opacity, modelViewer);
+              const originalColor = rgbToHex(originalData.color);
+              setMeshHexColor(info.mesh, originalColor, modelViewer);
+              
+              // 更新UI
+              document.getElementById(`visible_${meshId}`).checked = originalData.visible;
+              document.getElementById(`opacity_${meshId}`).value = Math.round(originalData.opacity * 100);
+              document.querySelector(`#opacity_${meshId} + .value-display`).textContent = `${Math.round(originalData.opacity * 100)}%`;
+              document.getElementById(`color_${meshId}`).value = originalColor;
+
+              document.querySelectorAll('input[id^="group_visible_"]').forEach(groupCheckbox => {
+                groupCheckbox.checked = true;
+              });
+            }
+          });
+        });
+      }
+
+      // 设置mesh透明度
+      function setMeshOpacity(mesh, opacity, modelViewer) {
+        try {
+          if (mesh.material) {
+            if (Array.isArray(mesh.material)) {
+              mesh.material.forEach(mat => {
+                mat.opacity = opacity;
+                mat.transparent = opacity < 1.0;
+                mat.needsUpdate = true;
+              });
+            } else {
+              mesh.material.opacity = opacity;
+              mesh.material.transparent = opacity < 1.0;
+              mesh.material.needsUpdate = true;
+            }
+          }
+          
+          // 强制更新
+          if (modelViewer.requestUpdate) {
+            modelViewer.requestUpdate();
+          }
+          
+          console.log(`设置mesh透明度为: ${opacity}`);
+        } catch (error) {
+          console.error('设置透明度失败:', error);
+        }
+      }
+
+      // 设置mesh颜色
+      function setMeshHexColor(mesh, hexColor, modelViewer) {
+        try {
+          // 兼容 #fff 简写
+          let hex = hexColor;
+          if (hex.length === 4) {
+            hex = '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+          }
+          const r = parseInt(hex.substr(1, 2), 16) / 255;
+          const g = parseInt(hex.substr(3, 2), 16) / 255;
+          const b = parseInt(hex.substr(5, 2), 16) / 255;
+
+          setMeshColor(mesh, [r, g, b], modelViewer);
+        } catch (error) {
+          console.error('设置颜色失败:', error);
+        }
+      }
+
+      function setMeshColor(mesh, color, modelViewer) {
+        try {
+          let r, g, b;
+          if (Array.isArray(color)) {
+            r = color[0];
+            g = color[1];
+            b = color[2];
+          } else if (typeof color === 'object' && color !== null && 'r' in color && 'g' in color && 'b' in color) {
+            r = color.r;
+            g = color.g;
+            b = color.b;
+          } else {
+            // 默认白色
+            r = g = b = 1.0;
+          }
+
+          if (mesh.material) {
+            if (Array.isArray(mesh.material)) {
+              mesh.material.forEach(mat => {
+                if (mat && mat.color && typeof mat.color.setRGB === 'function') {
+                  mat.color.setRGB(r, g, b);
+                  mat.needsUpdate = true;
+                }
+              });
+            } else if (mesh.material.color && typeof mesh.material.color.setRGB === 'function') {
+              mesh.material.color.setRGB(r, g, b);
+              mesh.material.needsUpdate = true;
+            }
+          }
+          
+          // 强制刷新
+          if (modelViewer.requestUpdate) {
+            modelViewer.requestUpdate();
+          }
+        } catch (error) {
+          console.error('设置颜色失败:', error);
+        }
+      }
+
+      // 遍历并更新透明度
+      function traverseAndUpdateOpacity(object, opacity) {
+        if (object && typeof object === 'object') {
+          if (object.isMesh && object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(mat => {
+                mat.opacity = opacity;
+                mat.transparent = opacity < 1.0;
+                mat.needsUpdate = true;
+              });
+            } else {
+              object.material.opacity = opacity;
+              object.material.transparent = opacity < 1.0;
+              object.material.needsUpdate = true;
+            }
+          }
+          
+          if (object.children && Array.isArray(object.children)) {
+            object.children.forEach(child => traverseAndUpdateOpacity(child, opacity));
+          }
+        }
+      }
+
+      // 遍历并更新金属度
+      function traverseAndUpdateMetalness(object, metalness) {
+        if (object && typeof object === 'object') {
+          if (object.isMesh && object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(mat => {
+                if (mat.metalness !== undefined) {
+                  mat.metalness = metalness;
+                  mat.needsUpdate = true;
+                }
+              });
+            } else if (object.material.metalness !== undefined) {
+              object.material.metalness = metalness;
+              object.material.needsUpdate = true;
+            }
+          }
+          
+          if (object.children && Array.isArray(object.children)) {
+            object.children.forEach(child => traverseAndUpdateMetalness(child, metalness));
+          }
+        }
+      }
+
+      // 遍历并更新粗糙度
+      function traverseAndUpdateRoughness(object, roughness) {
+        if (object && typeof object === 'object') {
+          if (object.isMesh && object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(mat => {
+                if (mat.roughness !== undefined) {
+                  mat.roughness = roughness;
+                  mat.needsUpdate = true;
+                }
+              });
+            } else if (object.material.roughness !== undefined) {
+              object.material.roughness = roughness;
+              object.material.needsUpdate = true;
+            }
+          }
+          
+          if (object.children && Array.isArray(object.children)) {
+            object.children.forEach(child => traverseAndUpdateRoughness(child, roughness));
+          }
+        }
+      }
+
+      // 页面加载完成后初始化
+      document.addEventListener('DOMContentLoaded', () => {
+        loadModelControls();
+      });
+    })();
+  </script>
+
+<style>
+  body {
+    background-color: black;
+  }
+
+  model-viewer {
+    width: 80%;
+    height: 100vh;
+  }
+
+  .controls {
+    background-color: #171f2b;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    padding: 10px;
+    border-radius: 10px;
+    position: absolute;
+    right: 20px;
+    top: 20px;
+    width: 300px;
+    height: calc(100vh - 40px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .separator {
+    height: 1px;
+    background: rgba(0, 0, 0, 0.2);
+    margin: 15px 0;
+  }
+
+  .radio-group {
+    margin: 10px 0;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .radio-group label {
+    display: inline-flex;
+    align-items: center;
+    margin: 0;
+    cursor: pointer;
+    padding: 0;
+    border-radius: 4px;
+    position: relative;
+    width: 24px;
+    height: 24px;
+    border: 2px solid #ccc;
+    transition: all 0.2s ease;
+  }
+
+  .radio-group input[type="radio"] {
+    display: none;
+  }
+
+  .radio-group label::after {
+    content: '';
+    width: 100%;
+    height: 100%;
+    border-radius: 2px;
+    display: block;
+  }
+
+  .radio-group label:hover {
+    transform: scale(1.1);
+  }
+
+  .radio-group input[type="radio"]:checked + label {
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.3);
+  }
+
+  /* 颜色方块样式 */
+  .color-black::after {
+    background: black;
+  }
+
+  .color-white::after {
+    background: white;
+    border: 1px solid #ddd;
+  }
+
+  .color-gray::after {
+    background: #404040;
+  }
+
+  .color-gradient::after {
+    background: linear-gradient(90deg, #9295ce 0%, #bbbde4 100%);
+  }
+
+  /* 模型控制样式 */
+  .model-controls {
+    margin-top: 10px;
+  }
+
+  .loading, .error, .info {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+  }
+
+  .error {
+    color: #e74c3c;
+  }
+
+  .success {
+    text-align: center;
+    padding: 10px;
+    color: #27ae60;
+    background: rgba(39, 174, 96, 0.1);
+    border-radius: 4px;
+    margin-bottom: 10px;
+    font-weight: bold;
+  }
+
+  .basic-controls {
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 6px;
+    border: 1px solid #ddd;
+  }
+
+  .control-header {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+  }
+
+  .control-btn {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid #ccc;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background-color 0.2s;
+    min-width: 60px;
+  }
+
+  .control-btn:hover {
+    background: #f0f0f0;
+  }
+
+  .control-btn:active {
+    background: #e0e0e0;
+  }
+
+  /* Mesh控制样式 */
+  .mesh-list {
+    flex: 1 1 auto;
+    max-height: none;
+    overflow-y: auto;
+  }
+
+  .mesh-item {
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    background: #4b5463;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: box-shadow 0.2s ease;
+  }
+
+  .mesh-item:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  }
+
+  .mesh-header {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.02);
+    border-bottom: 1px solid #eee;
+    border-radius: 6px 6px 0 0;
+  }
+
+  .mesh-name {
+    font-weight: bold;
+    cursor: pointer;
+    flex: 1;
+    margin-left: 8px;
+    color: white;
+    font-size: 14px;
+  }
+
+  .mesh-controls {
+    padding: 12px;
+  }
+
+  .control-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .control-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .control-row label {
+    min-width: 55px;
+    font-size: 12px;
+    color: #555;
+    font-weight: 500;
+  }
+
+  .opacity-slider {
+    flex: 1;
+    min-width: 80px;
+    height: 4px;
+    background: #ddd;
+    outline: none;
+    border-radius: 2px;
+    appearance: none;
+  }
+
+  .opacity-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #007bff;
+    cursor: pointer;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  .opacity-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #007bff;
+    cursor: pointer;
+    border-radius: 50%;
+    border: none;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  .value-display {
+    min-width: 35px;
+    font-size: 11px;
+    color: #666;
+    font-weight: 500;
+    text-align: center;
+  }
+
+  .color-picker {
+    width: 32px;
+    height: 24px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    cursor: pointer;
+    padding: 0;
+    background: none;
+  }
+
+  .reset-color-btn, .isolate-btn {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    background: #55bdbe;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px;
+    transition: all 0.2s;
+    color: white;
+  }
+
+  .reset-color-btn:hover, .isolate-btn:hover {
+    background: #55bdbe;
+    border-color: #ffc107;
+    color: white;
+  }
+
+  /* 旧样式保持兼容 */
+  .model-list {
+    height: 100%;
+    overflow-y: auto;
+  }
+
+  .model-item {
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .model-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .model-name {
+    font-weight: bold;
+    cursor: pointer;
+    flex: 1;
+  }
+
+  .model-controls-inner {
+    border-top: 1px solid #eee;
+    padding-top: 10px;
+  }
+
+  .control-group {
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .control-group label {
+    min-width: 60px;
+    font-size: 12px;
+    color: #555;
+  }
+
+  .opacity-value {
+    min-width: 35px;
+    font-size: 12px;
+    color: #666;
+  }
+
+  /* 响应式设计 */
+  @media (max-width: 768px) {
+    .controls {
+      width: calc(100% - 40px);
+      height: 200px;
+      top: auto;
+      bottom: 20px;
+    }
+    
+    model-viewer {
+      width: 100%;
+      height: calc(100vh - 240px);
+    }
+  }
+
+  .accordion-item {
+    border: 1px solid #eee;
+    border-radius: 6px;
+    margin-bottom: 10px;
+    background: #4b5463;
+  }
+  .accordion-header {
+    padding: 10px 12px;
+    font-weight: bold;
+    background: #5c6472;
+    border-radius: 6px 6px 0 0;
+    user-select: none;
+  }
+  .group-name {
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+    width: 220px;
+  }
+  .accordion-body {
+    padding: 8px 12px;
+  }
+</style>
+
+</html>

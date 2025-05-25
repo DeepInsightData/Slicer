@@ -85,6 +85,8 @@ class SlicerRequestHandler(BaseRequestHandler):
             responseBody, contentType = self.slice(request)
         elif request.find(b"/threeDGraphics") == 0:
             responseBody, contentType = self.threeDGraphics(request)
+        elif request.find(b"/threeDNodeMeta") == 0:
+            responseBody, contentType = self.threeDNodeMeta(request)
         elif request.find(b"/threeD") == 0:
             responseBody, contentType = self.threeD(request)
         elif request.find(b"/mrml") == 0:
@@ -433,7 +435,7 @@ class SlicerRequestHandler(BaseRequestHandler):
         slicer.app.applicationLogic().GetSelectionNode().SetReferenceActiveVolumeID(node.GetID())
         slicer.app.applicationLogic().PropagateVolumeSelection()
 
-        return b"{'status': 'success'}", b"application/json"
+        return b'{"status": "success"}', b"application/json"
 
     def getNRRD(self, volumeID):
         """Return a nrrd binary blob with contents of the volume node
@@ -967,6 +969,45 @@ space origin: %%origin%%
             pngData = self.vtkImageDataToPNG(imageData)
         self.logMessage("returning an image of %d length" % len(pngData))
         return pngData, b"image/png"
+    
+    def threeDNodeMeta(self, request):
+        """
+        Handle requests with path: /threeDNodeMeta
+        Return a json of the node meta data for a threeD view.
+        """
+        metas = []
+        for node in slicer.util.getNodesByClass("vtkMRMLDisplayableNode"):
+            displayNode = node.GetDisplayNode()
+            if not displayNode:
+                continue
+            if node.IsA("vtkMRMLSegmentationNode"):
+                segmentIDs = vtk.vtkStringArray()
+                segmentation = node.GetSegmentation()
+                segmentation.GetSegmentIDs(segmentIDs)
+                for i in range(segmentIDs.GetNumberOfValues()):
+                    segmentID = segmentIDs.GetValue(i)
+                    segment = segmentation.GetSegment(segmentID)
+                    color = segment.GetColor()
+                    bounds = [0]*6
+                    segment.GetBounds(bounds)
+                    bbox = [float(b) for b in bounds]
+                    metas.append({
+                        "name": segment.GetName(),
+                        "bbox": bbox,
+                        "color": color,
+                    })
+            else:
+                color = displayNode.GetColor()
+                bounds = [0]*6
+                node.GetBounds(bounds)
+                bbox = [float(b) for b in bounds]
+                metas.append({
+                    "name": node.GetName(),
+                    "bbox": bbox,
+                    "color": color
+                })
+        result = json.dumps(metas)
+        return result.encode(), b"application/json"    
 
     def threeDGraphics(self, request):
         """
